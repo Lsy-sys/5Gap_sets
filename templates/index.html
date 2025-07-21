@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>信号覆盖模拟器</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+    <script src="../static/js/jquery-3.7.1.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="main-card">
+            <div class="left-column">
+                <!-- 左栏内容开始 -->
+                <h1>信号覆盖模拟器</h1>
+                <p>请上传一张卫星航拍图，我们将自动处理并运行信号覆盖模拟。</p>
+                <div class="info-box">
+                    <p><strong>图片要求：</strong></p>
+                    <ul>
+                        <li>支持 PNG, JPEG, BMP 格式。</li>
+                        <li>图片中的不同区域需要使用特定的颜色编码来表示地形：</li>
+                        <li><span class="color-swatch empty"></span> 空地: 白色 (RGB: 255, 255, 255)</li>
+                        <li><span class="color-swatch building"></span> 建筑物: 暗红色 (RGB: 139, 0, 0)</li>
+                        <li><span class="color-swatch tree"></span> 树木: 森林绿 (RGB: 34, 139, 34)</li>
+                        <li><span class="color-swatch road"></span> 道路: 灰色 (RGB: 128, 128, 128)</li>
+                        <li><span class="color-swatch water"></span> 水体: 海军蓝 (RGB: 0, 0, 128)</li>
+                    </ul>
+                    <p>确保您的图片颜色与上述示例尽量精确匹配，以获得最佳识别效果。</p>
+                </div>
+
+                <section class="input-section">
+                    <!-- 新增：模型选择下拉框 -->
+                    <label for="modelSelect" class="model-select-label">选择仿真模型：</label>
+                    <select id="modelSelect" class="model-select">
+                        <option value="zuizhongban">综合优化模型（zuizhongban.m）</option>
+                        <option value="COST231_Walfisch_Ikegami_Model">COST231 Walfisch-Ikegami模型</option>
+                        <option value="coverage_simulation">简化覆盖率蒙特卡洛模型</option>
+                    </select>
+
+                    <!-- 新增：coverage_simulation 参数输入区，初始隐藏 -->
+                    <div id="coverageParams" class="coverage-params hidden">
+                        <label>区域长度 a：<input type="number" id="paramA" value="100" min="1"></label><br>
+                        <label>区域宽度 b：<input type="number" id="paramB" value="100" min="1"></label><br>
+                        <label>点的数量 n：<input type="number" id="paramN" value="5" min="1"></label><br>
+                        <label>覆盖半径 r：<input type="number" id="paramR" value="20" min="1"></label><br>
+                        <label>模拟次数 num_trials：<input type="number" id="paramTrials" value="100" min="1"></label>
+                    </div>
+                    <!-- 以上为新增内容 -->
+
+                    <label for="gridImageInput" class="custom-file-upload">
+                        选择栅格图片
+                    </label>
+                    <input type="file" id="gridImageInput" accept="image/png, image/jpeg, image/bmp">
+                    <span id="fileNameDisplay" class="file-name-display">未选择文件</span>
+
+                    <img id="uploadedImagePreview" class="hidden" src="" alt="上传图片预览">
+
+                    <button id="simulateBtn">开始模拟</button>
+                </section>
+
+                <div id="loading" class="hidden status-message">
+                    <p>正在处理和模拟，请稍候...</p>
+                    <div class="spinner"></div>
+                </div>
+                <div id="error" class="error status-message hidden"></div>
+                <!-- 左栏内容结束 -->
+            </div>
+            <div class="right-column">
+                <!-- 右栏内容开始 -->
+                <h2>模拟结果</h2>
+                <section id="results">
+                    <div class="tab-container">
+                        <div class="tabs">
+                            <button class="tab-button active" data-tab="tab-plot1">基站与栅格</button>
+                            <button class="tab-button" data-tab="tab-plot2">信号强度</button>
+                            <button class="tab-button" data-tab="tab-plot3">覆盖率历史</button>
+                            <button class="tab-button" data-tab="tab-plot4">信号直方图</button>
+                            <button class="tab-button" data-tab="tab-stats">统计数据</button>
+                        </div>
+                        <div id="tab-plot1" class="tab-content active">
+                            <img src="../static/results/grid_and_stations.png" alt="学校栅格模型与基站分布" id="plot1-img">
+                            <p class="placeholder-text">此处将显示学校栅格模型与基站分布图。</p>
+                        </div>
+                        <div id="tab-plot2" class="tab-content hidden">
+                            <img src="../static/results/signal_strength_map.png" alt="信号强度分布" id="plot2-img">
+                            <p class="placeholder-text" >此处将显示信号强度分布图。</p>
+
+                        </div>
+                        <div id="tab-plot3" class="tab-content hidden">
+                            <img src="../static/results/coverage_history.png" alt="覆盖率优化历史" id="plot3-img">
+                            <p class="placeholder-text">此处将显示覆盖率优化历史图。</p>
+                        </div>
+                        <div id="tab-plot4" class="tab-content hidden">
+                            <img src="../static/results/signal_histogram.png" alt="信号强度分布直方图" id="plot4-img">
+                            <p class="placeholder-text">此处将显示信号强度分布直方图。</p>
+                        </div>
+                        <div id="tab-stats" class="tab-content hidden">
+                            <h3>统计信息</h3>
+                            <pre id="textResults">
+                                此处将显示模拟结果的详细统计信息，例如：
+                                最佳覆盖率: --%
+                                平均信号强度: -- dBm
+                                信号强度标准差: -- dB
+                                基站位置:
+                                基站 1: (--, --)
+                                基站 2: (--, --)
+                                基站 3: (--, --)
+                                基站 4: (--, --)
+                                基站 5: (--, --)
+                            </pre>
+                        </div>
+                    </div>
+                </section>
+                <!-- 右栏内容结束 -->
+            </div>
+        </div>
+    </div>
+    <script src="../static/js/script.js"></script>
+</body>
+</html>
