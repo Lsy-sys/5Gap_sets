@@ -1,118 +1,248 @@
 import numpy as np
 from PIL import Image
 import os
+import cv2
+from sklearn.cluster import KMeans
+from scipy import ndimage
+from scipy.spatial.distance import cdist
 
 
-def image_to_grid_python(image_path, target_grid_rows, target_grid_cols, output_dir='static/uploads/'):
+def calculate_texture_features(patch):
     """
-    将航拍图转换为栅格数据。
-    根据预定义的颜色（例如空地、建筑物、树木、道路、水体），将图片中的像素映射到对应的数字代码。
+    计算纹理特征（灰度共生矩阵的简化版本）
+    """
+    if patch.size == 0:
+        return 0
+    
+    # 转换为灰度图
+    if len(patch.shape) == 3:
+        gray = np.mean(patch, axis=2)
+    else:
+        gray = patch
+    
+    # 计算梯度
+    grad_x = ndimage.sobel(gray, axis=1)
+    grad_y = ndimage.sobel(gray, axis=0)
+    gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+    
+    # 返回梯度强度的平均值作为纹理特征
+    return np.mean(gradient_magnitude)
 
-    参数:
-        image_path (str): 航拍图的文件路径 (例如 'path/to/your/aerial_image.png')
-        target_grid_rows (int): 目标栅格的行数 (例如 68)
-        target_grid_cols (int): 目标栅格的列数 (例如 95)
-        output_dir (str): 输出 CSV 文件的目录。默认为 'static/uploads/'。
 
-    返回:
-        numpy.ndarray: 转换后的栅格数据矩阵，包含 0-4 的整数值。
-                       同时会将此数据保存为 'school_grid.csv'。
+def detect_edges(patch):
+    """
+    检测边缘特征
+    """
+    if patch.size == 0:
+        return 0
+    
+    # 转换为灰度图
+    if len(patch.shape) == 3:
+        gray = np.mean(patch, axis=2)
+    else:
+        gray = patch
+    
+    # 使用Canny边缘检测
+    edges = cv2.Canny((gray * 255).astype(np.uint8), 50, 150)
+    return np.sum(edges > 0) / edges.size
+
+
+def rgb_to_hsv(rgb_color):
+    """
+    将RGB颜色转换为HSV
+    """
+    rgb_normalized = rgb_color / 255.0
+    hsv = cv2.cvtColor(np.uint8([[rgb_normalized * 255]]), cv2.COLOR_RGB2HSV)
+    return hsv[0][0] / np.array([180, 255, 255])
+
+
+def enhanced_image_to_grid_python(image_path, target_grid_rows, target_grid_cols, output_dir='static/uploads/'):
+    """
+    增强版图像转栅格算法，使用多特征融合识别地形类型
+    
+    新增特性：
+    1. HSV色彩空间分析
+    2. 纹理特征分析
+    3. 边缘检测
+    4. 自适应颜色聚类
+    5. 形态学后处理
     """
     try:
         # 1. 读取图像
-        img = Image.open(image_path).convert('RGB')  # 确保转换为RGB格式
-    except FileNotFoundError:
-        # print(f"错误: 图像文件未找到: {image_path}")
-        return None
+        img = Image.open(image_path).convert('RGB')
+        img_np = np.array(img)
     except Exception as e:
-        # print(f"错误: 无法读取图像文件 {image_path}: {e}")
+        print(f"错误: 无法读取图像文件 {image_path}: {e}")
         return None
 
-    img_np = np.array(img) / 255.0  # 将像素值归一化到 0-1 范围
-
-    # 2. 定义颜色映射 (RGB 值, 归一化后)
-    # 这些颜色值应与前端和原MATLAB脚本中描述的颜色保持一致
-    # 0: 空地 - 白色 (RGB: 255, 255, 255)
-    # 1: 建筑物 - 暗红色 (RGB: 139, 0, 0)
-    # 2: 树木 - 森林绿 (RGB: 34, 139, 34)
-    # 3: 道路 - 灰色 (RGB: 128, 128, 128)
-    # 4: 水体 - 海军蓝 (RGB: 0, 0, 128)
-
-    color_map = {
-        0: np.array([1.0, 1.0, 1.0]),  # 空地 (白色)
-        1: np.array([139 / 255, 0 / 255, 0 / 255]),  # 建筑物 (暗红色)
-        2: np.array([34 / 255, 139 / 255, 34 / 255]),  # 树木 (森林绿)
-        3: np.array([128 / 255, 128 / 255, 128 / 255]),  # 道路 (灰色)
-        4: np.array([0 / 255, 0 / 255, 128 / 255])  # 水体 (海军蓝)
+    # 2. 图像预处理
+    # 转换为HSV色彩空间
+    img_hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
+    
+    # 3. 自适应颜色聚类（发现图像中的主要颜色）
+    pixels = img_np.reshape(-1, 3)
+    kmeans = KMeans(n_clusters=8, random_state=42, n_init=10)
+    kmeans.fit(pixels)
+    dominant_colors = kmeans.cluster_centers_
+    
+    # 4. 定义增强的颜色映射（包含HSV信息）
+    terrain_definitions = {
+        0: {  # 空地
+            'name': '空地',
+            'rgb': np.array([255, 255, 255]),
+            'hsv': np.array([0, 0, 1.0]),
+            'texture_threshold': 0.1,
+            'edge_threshold': 0.05
+        },
+        1: {  # 建筑物
+            'name': '建筑物',
+            'rgb': np.array([139, 0, 0]),
+            'hsv': np.array([0, 1.0, 0.55]),
+            'texture_threshold': 0.3,
+            'edge_threshold': 0.15
+        },
+        2: {  # 树木
+            'name': '树木',
+            'rgb': np.array([34, 139, 34]),
+            'hsv': np.array([120/180, 0.76, 0.55]),
+            'texture_threshold': 0.4,
+            'edge_threshold': 0.08
+        },
+        3: {  # 道路
+            'name': '道路',
+            'rgb': np.array([128, 128, 128]),
+            'hsv': np.array([0, 0, 0.5]),
+            'texture_threshold': 0.2,
+            'edge_threshold': 0.12
+        },
+        4: {  # 水体
+            'name': '水体',
+            'rgb': np.array([0, 0, 128]),
+            'hsv': np.array([240/180, 1.0, 0.5]),
+            'texture_threshold': 0.05,
+            'edge_threshold': 0.03
+        }
     }
-
-    # 颜色容差 (允许颜色匹配时的轻微偏差)
-    color_tolerance = 0.05  # 值越小，匹配越严格
-
-    # 3. 初始化目标栅格数据
+    
+    # 5. 初始化栅格数据
     grid_data = np.zeros((target_grid_rows, target_grid_cols), dtype=int)
-
-    # 4. 图像缩放和颜色识别
+    
+    # 6. 图像缩放参数
     img_rows, img_cols, _ = img_np.shape
-
     row_scale = img_rows / target_grid_rows
     col_scale = img_cols / target_grid_cols
-
-    # print("正在将图像转换为栅格数据...")
-
+    
+    print("正在使用增强算法转换图像...")
+    
     for r in range(target_grid_rows):
         for c in range(target_grid_cols):
-            # 计算当前栅格单元在原始图像中的对应区域
+            # 计算当前栅格单元对应的图像区域
             start_row = int(round(r * row_scale))
             end_row = int(round((r + 1) * row_scale))
             start_col = int(round(c * col_scale))
             end_col = int(round((c + 1) * col_scale))
-
-            # 确保索引在图像范围内
+            
+            # 边界检查
             start_row = max(0, start_row)
             end_row = min(img_rows, end_row)
             start_col = max(0, start_col)
             end_col = min(img_cols, end_col)
-
-            # 提取该区域的像素块
+            
             if start_row >= end_row or start_col >= end_col:
-                # 区域无效，可能在图像边缘，或缩放计算导致，赋默认值
-                grid_data[r, c] = 0  # 默认设置为 '空地'
+                grid_data[r, c] = 0
                 continue
-
-            patch = img_np[start_row:end_row, start_col:end_col, :]
-
-            # 计算该区域的平均颜色
-            avg_color = np.mean(patch, axis=(0, 1))
-
-            # 查找最接近的预定义颜色
-            min_dist = np.inf
-            matched_type = 0  # 默认空地
-
-            for type_val, defined_color in color_map.items():
-                # 计算颜色距离 (欧几里得距离)
-                dist = np.linalg.norm(avg_color - defined_color)
-
-                if dist < min_dist:
-                    min_dist = dist
-                    matched_type = type_val
-
-            # 如果最佳匹配的颜色距离在容差范围内，则赋值
-            if min_dist <= color_tolerance:
-                grid_data[r, c] = matched_type
-            else:
-                # 如果颜色偏差过大，无法匹配任何预设类型，可以设置为默认值
-                grid_data[r, c] = 0  # 默认为空地
-
-    # print("图像转换完成。正在保存栅格数据到 school_grid.csv...")
-
-    # 5. 保存栅格数据到 CSV 文件
+            
+            # 提取图像块
+            patch_rgb = img_np[start_row:end_row, start_col:end_col, :]
+            patch_hsv = img_hsv[start_row:end_row, start_col:end_col, :]
+            
+            # 计算多特征
+            avg_rgb = np.mean(patch_rgb, axis=(0, 1))
+            avg_hsv = np.mean(patch_hsv, axis=(0, 1))
+            texture_score = calculate_texture_features(patch_rgb)
+            edge_score = detect_edges(patch_rgb)
+            
+            # 多特征融合评分
+            best_score = -np.inf
+            best_type = 0
+            
+            for type_val, terrain in terrain_definitions.items():
+                # 1. RGB颜色相似度
+                rgb_dist = np.linalg.norm(avg_rgb - terrain['rgb'])
+                rgb_score = 1.0 / (1.0 + rgb_dist / 100.0)
+                
+                # 2. HSV颜色相似度
+                hsv_dist = np.linalg.norm(avg_hsv - terrain['hsv'])
+                hsv_score = 1.0 / (1.0 + hsv_dist)
+                
+                # 3. 纹理特征匹配
+                texture_match = 1.0 / (1.0 + abs(texture_score - terrain['texture_threshold']))
+                
+                # 4. 边缘特征匹配
+                edge_match = 1.0 / (1.0 + abs(edge_score - terrain['edge_threshold']))
+                
+                # 5. 与聚类中心的相似度
+                cluster_dist = np.min(cdist([avg_rgb], dominant_colors, 'euclidean'))
+                cluster_score = 1.0 / (1.0 + cluster_dist / 50.0)
+                
+                # 综合评分（加权平均）
+                total_score = (0.3 * rgb_score + 
+                              0.3 * hsv_score + 
+                              0.2 * texture_match + 
+                              0.1 * edge_match + 
+                              0.1 * cluster_score)
+                
+                if total_score > best_score:
+                    best_score = total_score
+                    best_type = type_val
+            
+            grid_data[r, c] = best_type
+    
+    # 7. 形态学后处理（改善识别结果）
+    grid_data = morphological_post_processing(grid_data)
+    
+    # 8. 保存结果
     os.makedirs(output_dir, exist_ok=True)
     csv_filename = os.path.join(output_dir, 'school_grid.csv')
     np.savetxt(csv_filename, grid_data, delimiter=',', fmt='%d')
-
-    # print(f"栅格数据已保存到: {csv_filename}")
+    
+    print(f"增强算法转换完成，结果已保存到: {csv_filename}")
     return grid_data
+
+
+def morphological_post_processing(grid_data):
+    """
+    形态学后处理，改善识别结果
+    """
+    # 创建结构元素
+    kernel = np.ones((3, 3), np.uint8)
+    
+    # 对每种地形类型进行形态学操作
+    for terrain_type in range(5):
+        # 创建二值掩码
+        mask = (grid_data == terrain_type).astype(np.uint8)
+        
+        # 小面积噪声去除
+        if terrain_type in [1, 2]:  # 建筑物和树木
+            # 去除孤立的像素
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            # 填充小洞
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        elif terrain_type == 3:  # 道路
+            # 连接断开的道路
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        
+        # 更新栅格数据
+        grid_data[mask == 1] = terrain_type
+    
+    return grid_data
+
+
+def image_to_grid_python(image_path, target_grid_rows, target_grid_cols, output_dir='static/uploads/'):
+    """
+    主函数，调用增强版算法
+    """
+    return enhanced_image_to_grid_python(image_path, target_grid_rows, target_grid_cols, output_dir)
 
 
 if __name__ == '__main__':
